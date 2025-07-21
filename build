@@ -255,7 +255,32 @@ while [ $# -gt 0 ]; do
     # Build
     echo "::group::Build $PACKAGE for DSM$DSM on $ARCH" >&2
     cd $TOOLKIT
-    pkgscripts-ng/PkgCreate.py -c -p $ARCH -v $DSM $PACKAGE >&2 || exit 1
+    
+    # Check if PACKAGE name is set
+    if [ -z "$PACKAGE" ]; then
+        echo "Error: Package name is not set" >&2
+        exit 1
+    fi
+    
+    echo "Building package: $PACKAGE"
+    echo "Architecture: $ARCH"
+    echo "DSM Version: $DSM"
+    
+    # Check if package directory exists
+    if [ ! -d "$TOOLKIT/source/$PACKAGE" ]; then
+        echo "Error: Package directory $TOOLKIT/source/$PACKAGE does not exist" >&2
+        exit 1
+    fi
+    
+    # Run PkgCreate.py with proper error handling
+    pkgscripts-ng/PkgCreate.py -c -p $ARCH -v $DSM -x 0 "$PACKAGE" >&2
+    BUILD_RESULT=$?
+    
+    if [ $BUILD_RESULT -ne 0 ]; then
+        echo "Error: Package build failed with exit code $BUILD_RESULT" >&2
+        exit $BUILD_RESULT
+    fi
+    
     echo "::endgroup::" >&2
 
     # Push to output folder
