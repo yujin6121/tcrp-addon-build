@@ -188,7 +188,18 @@ while [ $# -gt 0 ]; do
         export SOURCE=$1
         export PACKAGE=$(toCamelCase $(basename $1))
         ;;
+    *)
+        export SOURCE="."
+        export PACKAGE=$(toCamelCase "$1")
+        ;;
     esac
+
+    # Immediately check if PACKAGE is set
+    if [ -z "$PACKAGE" ]; then
+        echo "Error: Package name must be provided as an argument" >&2
+        echo "Usage: $0 [-v DSM_VERSION] [-p ARCH] ... <package_name>" >&2
+        exit 1
+    fi
 
     # Check source folder
     if [ ! -d "$WORKSPACE/$SOURCE" ]; then
