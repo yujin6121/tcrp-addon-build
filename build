@@ -136,10 +136,18 @@ git config --global --add safe.directory $TOOLKIT/pkgscripts-ng
 echo "::group::Deploy Chroot Environment" >&2
 
 if [ "$ARCH" = "noarch" ]; then
-    # For noarch, we'll use x86_64 as the build environment
-    BUILD_ARCH="x86_64"
+    # For noarch packages in DSM 7.2+, use x86_64-7.2
+    if [ $(echo "$DSM >= 7.2" | bc -l) -eq 1 ]; then
+        BUILD_ARCH="x86_64-7.2"
+    else
+        BUILD_ARCH="x86_64"
+    fi
 else
-    BUILD_ARCH="$ARCH"
+    if [ $(echo "$DSM >= 7.2" | bc -l) -eq 1 ] && [ "$ARCH" = "x86_64" ]; then
+        BUILD_ARCH="x86_64-7.2"
+    else
+        BUILD_ARCH="$ARCH"
+    fi
 fi
 
 # Deploy Chroot Environment
@@ -290,8 +298,13 @@ while [ $# -gt 0 ]; do
     
     # Run PkgCreate.py with proper error handling
     if [ "$ARCH" = "noarch" ]; then
-        # For noarch packages, we need to specify both noarch and the build architecture
-        pkgscripts-ng/PkgCreate.py -c -p "noarch,x86_64" -v $DSM -x 0 "$PACKAGE" >&2
+        if [ $(echo "$DSM >= 7.2" | bc -l) -eq 1 ]; then
+            # For noarch packages in DSM 7.2+
+            pkgscripts-ng/PkgCreate.py -c -p "noarch,x86_64-7.2" -v $DSM -x 0 "$PACKAGE" >&2
+        else
+            # For noarch packages in older DSM versions
+            pkgscripts-ng/PkgCreate.py -c -p "noarch,x86_64" -v $DSM -x 0 "$PACKAGE" >&2
+        fi
     else
         pkgscripts-ng/PkgCreate.py -c -p $ARCH -v $DSM -x 0 "$PACKAGE" >&2
     fi
