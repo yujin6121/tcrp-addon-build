@@ -1,0 +1,2 @@
+echo '[Change_panel_size]
+description="Change Panel Size service"' > my_package/conf/resource

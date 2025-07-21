@@ -1,0 +1,23 @@
+#!/bin/sh
+
+PKG_DIR="/var/packages/Change_panel_size/target"
+LOG_DIR="/var/packages/Change_panel_size/var"
+SYNO_LINK="/usr/syno/synoman/webman/3rdparty/Change_panel_size"
+
+# 로그 디렉토리 생성 및 권한 설정
+mkdir -p "${LOG_DIR}"
+touch "${LOG_DIR}/change_panel_size.log"
+chmod 644 "${LOG_DIR}/change_panel_size.log"
+
+# 웹 파일 권한 설정 (DSM 기본 웹 서버용)
+chown -R http:http "${PKG_DIR}/web"
+
+# 심볼릭 링크 생성 (DSM 3rd-party 메뉴 통합)
+if [ ! -L "${SYNO_LINK}" ]; then
+    ln -s "${PKG_DIR}/web" "${SYNO_LINK}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Created symbolic link ${SYNO_LINK}" >> "${LOG_DIR}/change_panel_size.log"
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Symbolic link ${SYNO_LINK} already exists" >> "${LOG_DIR}/change_panel_size.log"
+fi
+
+exit 0

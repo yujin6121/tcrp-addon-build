@@ -1,0 +1,263 @@
+#!/bin/sh
+# Copyright (C) 2000-2020 Synology Inc. All rights reserved.
+
+# Entry point for installing the package into the PKG_DIR.
+echo "************************************************************"
+echo "  Running Default SynoBuildConf/install for <$1>"
+echo "************************************************************"
+
+# Define key variables for package build process
+PKG_NAME=$1
+PKG_CONF="."
+INST_DIR="/tmp/_install_${PKG_NAME}"
+PKG_DIR="/tmp/_package_${PKG_NAME}"
+PKG_DEST="/image/packages"
+
+DEFAULT_NAME="Synology Package Builder"
+DEFAULT_GITHUB="https://www.github.com/tomgrv/synology-package-builder"
+DEFAULT_DESCRIPTION="Built with github.com/tomgrv/synology-package-builder"
+
+LANGS="enu cht chs krn ger fre ita spn jpn dan nor sve nld rus plk ptb ptg hun trk csy"
+
+# Load Synology's SPK packaging utility functions
+source /pkgscripts/include/pkg_util.sh
+
+# Define to camel case
+toCamelCase() {
+	# Replace delimiters with spaces, then process
+	echo "$*" | awk '{
+        n = split(tolower($0), a, /[ _-]+/)
+        for (i = 1; i <= n; i++) {
+            out = out toupper(substr(a[i],1,1)) substr(a[i],2)
+        }
+        print out
+    }'
+}
+
+toDisplay() {
+	# Replace delimiters with spaces, then process
+	echo "$*" | awk '{
+        n = split(tolower($0), a, /[ _-]+/)
+        for (i = 1; i <= n; i++) {
+            out = out toupper(substr(a[i],1,1)) substr(a[i],2)  " "
+        }
+        print out
+    }'
+}
+
+# Function to prepare directories for the build process
+prepare_dirs() {
+
+	echo "→ Preparing directories for package build..."
+
+	# prepare install and package dir
+	for dir in $INST_DIR $PKG_DIR; do
+		rm -rf "$dir"
+	done
+
+	for dir in $INST_DIR $PKG_DIR $PKG_DEST; do
+		mkdir -p "$dir" # use default mask
+	done
+}
+
+# Function to copy files from the source directory to the install directory
+install_files() {
+	local src=$1
+	local filter=${2:-*}
+
+	echo "→ Install files from ./target/$src/$filter to ${INST_DIR}/$src"
+
+	test -d ${INST_DIR}/$src || install -d ${INST_DIR}/$src
+	test -n "$(ls -A ./target/$src/$filter 2>/dev/null)" && cp -a ./target/$src/$filter ${INST_DIR}/$src
+}
+
+# Function to create the package.tgz file from the install directory
+create_tgz() {
+
+	echo "→ Creating package.tgz from install dir..."
+
+	# Prepare directories
+	prepare_dirs $INST_DIR $PKG_DIR
+
+	# Copy UI files if present
+	install_files ui
+
+	# Copy docker images if present
+	install_files docker
+
+	# Copy configuration files
+	install_files conf
+
+	# Copy bin files
+	install_files bin
+
+	# Create package.tgz from install directory
+	pkg_make_package ${INST_DIR} ${PKG_DIR}
+}
+
+# Function to build INFO file entries from config.json using jq
+build_info() {
+	local name=$1
+	local source=$2
+	local rule=$3
+	local default=$4
+
+	local value=$(test -f "$source" && jq -r "$rule" "$source" --arg default "$default" || echo "$source")
+	test -n "$value" && echo $name="\"$value\""
+}
+
+# Generate the INFO file for the package from config.json
+create_info() {
+
+	local json=$PWD/config.json
+
+	echo "Creating INFO file from <$json>..." >&2
+
+	# Load package name
+	local package=$(jq -r '.name//$default' $json --arg default "no-name")
+
+	# Load name
+	build_info 'package' $(toCamelCase ${package##*/})
+
+	# Load version under 'x.y.z-pre+build' format.
+	# Remove any leading letters
+	# If build metadata is present and in the format '+a.b.c', use a.b.c and append -xyz (without dots) if present
+	# If not, keep the x.y.z-pre version with no build metadata
+	# Else, use the default version "0.0.0-noversion"
+	local version=$(jq -r '
+		def lpad(n):
+  			tostring
+  			| if (n > length) then ((n - length) * "0") + . else . end;
+		.version // empty
+		| sub("^[a-zA-Z]+";"")
+		| if test("\\+") then
+			capture("^(?<main>[0-9]+\\.[0-9]+\\.[0-9]+)(-(?<pre>[^+]+))?\\+(?<build>.+)$") as $v
+			| if ($v.build | test("^[0-9]+\\.[0-9]+\\.[0-9]+$")) then
+				$v.build + "-" + ($v.main | split(".") | map(lpad( 2)) | join(""))
+			else
+				$v.main
+			end
+		else
+			.
+		end // "0.0.0"
+	' $json)
+
+	build_info 'version' "$version"
+
+	# Load description
+	build_info 'description' $json '.description // $default' "$DEFAULT_DESCRIPTION"
+
+	# Display description in different languages
+	for l in $LANGS; do
+		build_info "description_$l" $json ".synology.description_$l // empty"
+	done
+
+	# Load maintainer and maintainer URL$DEFAULT_URL
+	build_info 'maintainer' $json '.synology.maintainer // .author.name // $default' "$DEFAULT_NAME"
+	build_info 'maintainer_url' $json '.synology.maintainer_url // .homepage // $default' "$DEFAULT_GITHUB"
+	build_info 'distributor' $json '.synology.distributor // $default' "$DEFAULT_NAME"
+	build_info 'distributor_url' $json '.synology.distributor_url // $default' "$DEFAULT_GITHUB"
+	build_info 'support_url' $json '.synology.support_url // .bugs.url // $default' "$DEFAULT_GITHUB/issues"
+	build_info 'helpurl' $json '.synology.help_url // .synology.helpurl // $default' "$DEFAULT_GITHUB#readme"
+
+	# Load DSM version and architecture requirements
+	build_info 'os_min_ver' $json '.synology.os_min_ver // if .os | type == "array" then .os[] | select(startswith("dsm:")) | sub("dsm:"; "") else $default end' 7.0-40337
+	build_info 'os_max_ver' $json '.synology.os_max_ver // empty'
+	build_info 'arch' $json '.synology.arch // if .cpu | type == "array" then .cpu[] | select(startswith("dsm:")) | sub("dsm:"; "") else $default end' $(pkg_get_platform_family)
+	build_info 'displayname' $json '.synology.displayname // $default' "$(toDisplay $package)"
+
+	# Load display names for different languages
+	for l in $LANGS; do
+		build_info "displayname_$l" $json ".synology.description_$l // empty"
+	done
+
+	# Mark as third-party package
+	build_info 'thirdparty' 'yes'
+
+	# Mark as beta if version contains a dash
+	case $(jq -r '.version // "0.0.0-noversion"' $json) in
+	*-*) build_info 'beta' 'true' ;;
+	*) build_info 'beta' 'false' ;;
+	esac
+
+	#echo model=\'$(jq -r 'if .dsmConfig | type == "array" then .dsmConfig.model | join(" ") else "" end ' $json)\'
+	#
+	#### DSM Configuration
+	#echo adminport=$(jq -r '.dsmConfig.adminport // .config.admin.port // ""' $json)
+	#echo adminurl=$(jq -r '.dsmConfig.adminurl  // .config.admin.url // ""' $json)
+	#echo adminprotocol=$(jq -r '.dsmConfig.adminprotocol // .config.admin.protocol // ""' $json)
+	#
+	echo dsmuidir=\"ui\"
+	#echo dsmappname=$(jq -r 'if .dsmConfig.dsmappname | type == "array" then .dsmConfig.dsmappname | join(" ") else null end // if .dsmConfig.appname | type == "array" then  .dsmConfig.appname | join(" ") else null end // $default' $json --arg default ${package##*/})
+	#echo dsmapppage=$(jq -r '.dsmConfig.dsmapppage // .dsmConfig.apppage // ""' $json)
+	#echo dsmapplaunchname=\'$(jq -r '.dsmConfig.dsmapplaunchname // .dsmConfig.applaunchname // $default' $json --arg default ${package##*/})\'
+
+	# Load package dependencies
+	echo install_dep_packages=\"$(
+
+		(
+			jq 'if .synology.install_dep_packages | type == "array" then .synology.install_dep_packages | to_entries | map("\(.key)\(.value)") | join(":") else empty end' $json
+
+			# Add ContainerManager dependency if docker resource is present
+			if [ -f "$PKG_CONF/conf/resource" ]; then
+				jq --arg dep ":ContainerManager>=20.0.0-0" -r 'if has("docker") then $dep else empty end' $PKG_CONF/conf/resource
+			fi
+
+			# Add ContainerManager dependency if docker preset is present
+			if [ -f "$PKG_CONF/conf/presets" ]; then
+				jq --arg dep ":ContainerManager>=20.0.0-0" -r 'if has("docker") then $dep else empty end' $PKG_CONF/conf/presets
+			fi
+		) | tr -d '[:space:]' | sed 's/::/:/g' | sed 's/^://;s/:$//'
+	)\"
+
+	for size in "" "_120" "_128" "_144" "_256"; do
+		icon=$PKG_CONF/PACKAGE_ICON${size}.PNG
+		test -f $icon && echo "package_icon${size}=\"$(base64 -w 0 $icon)\""
+	done
+
+}
+
+# Create the final .spk package
+create_spk() {
+
+	echo "Creating spk..."
+
+	# Copy scripts, conf, and wizard UI files
+	test -d $PKG_DIR || install -d $PKG_DIR
+	test -d $PKG_DIR/scripts || install -d $PKG_DIR/scripts
+	cp -av $PKG_CONF/scripts/* $PKG_DIR/scripts && chmod 755 $PKG_DIR/scripts/*
+
+	test -d $PKG_DIR/conf || install -d $PKG_DIR/conf
+	cp -av $PKG_CONF/conf/* $PKG_DIR/conf
+
+	test -d $PKG_DIR/WIZARD_UIFILES || install -d $PKG_DIR/WIZARD_UIFILES
+	cp -av $PKG_CONF/WIZARD_UIFILES/* $PKG_DIR/WIZARD_UIFILES
+
+	# Copy LICENSE and icons if present
+	test -f LICENSE && cp -av LICENSE $PKG_DIR || echo "No LICENSE file found"
+
+	for size in "" "_120" "_128" "_144" "_256"; do
+		icon=$PKG_CONF/PACKAGE_ICON${size}.PNG
+		test -f $icon && cp -av $icon $PKG_DIR || echo "No icon found: $icon"
+	done
+
+	# Create INFO file
+	create_info | tee ./INFO | tee $PKG_DIR/INFO
+
+	# Build the final .spk package and place it in the output directory
+	mkdir -p ${PKG_DEST}
+	pkg_make_spk ${PKG_DIR} ${PKG_DEST} $(pkg_get_spk_family_name)
+}
+
+# prepare install and package dir
+for dir in $INST_DIR $PKG_DIR; do
+	rm -rf "$dir"
+done
+
+for dir in $INST_DIR $PKG_DIR $PKG_DEST; do
+	mkdir -p "$dir" # use default mask
+done
+
+create_tgz
+
+create_spk

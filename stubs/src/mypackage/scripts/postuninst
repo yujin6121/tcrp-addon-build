@@ -1,0 +1,23 @@
+#!/bin/sh
+
+PKG_DIR="/var/packages/Change_panel_size/target"
+LOG_DIR="/var/packages/Change_panel_size/var"
+LOG="${LOG_DIR}/change_panel_size.log"
+PID_FILE="${LOG_DIR}/change_panel_size.pid"
+SYNO_LINK="/usr/syno/synoman/webman/3rdparty/Change_panel_size"
+
+# 심볼릭 링크 제거
+if [ -L "${SYNO_LINK}" ]; then
+    rm -f "${SYNO_LINK}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Removed symbolic link ${SYNO_LINK}" >> "${LOG}"
+else
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] No symbolic link found at ${SYNO_LINK}" >> "${LOG}"
+fi
+
+# 로그 및 PID 파일 정리
+if [ -d "${LOG_DIR}" ]; then
+    rm -f "${LOG}" "${PID_FILE}"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Removed log and PID files from ${LOG_DIR}" >> "${LOG_DIR}/uninstall.log"
+fi
+
+exit 0
