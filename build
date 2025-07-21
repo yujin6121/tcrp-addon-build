@@ -132,22 +132,27 @@ mkdir -p $OUTPUT
 # Set safe directory
 git config --global --add safe.directory $TOOLKIT/pkgscripts-ng
 
-# Check if the Arch is supported
-if [ "$ARCH" != "noarch" ]; then
+# Check and setup build environment
+echo "::group::Deploy Chroot Environment" >&2
 
-    echo "::group::Deploy Chroot Environment For $ARCH-$DSM Target" >&2
+if [ "$ARCH" = "noarch" ]; then
+    # For noarch, we'll use x86_64 as the build environment
+    BUILD_ARCH="x86_64"
+else
+    BUILD_ARCH="$ARCH"
+fi
 
-    # Deploy Chroot Environment For Different NAS Target
-    # https://help.synology.com/developer-guide/getting_started/prepare_environment.html
-    if [ ! -d "$TOOLKIT/build_env/ds.$ARCH-$DSM" ] || [ ! -f "$TOOLKIT/build_env/ds.$ARCH-$DSM/PkgVersion" ]; then
-        mkdir -p $TOOLKIT/build_env
-        cd $TOOLKIT/pkgscripts-ng/
-        git checkout DSM$DSM || exit 1
-        ./EnvDeploy --version $DSM -p $ARCH >&2 || exit 1
-        cd -
-    else
-        echo "Chroot environment for $ARCH-$DSM already exists" >&2
-    fi >&2
+# Deploy Chroot Environment
+# https://help.synology.com/developer-guide/getting_started/prepare_environment.html
+if [ ! -d "$TOOLKIT/build_env/ds.$BUILD_ARCH-$DSM" ] || [ ! -f "$TOOLKIT/build_env/ds.$BUILD_ARCH-$DSM/PkgVersion" ]; then
+    mkdir -p $TOOLKIT/build_env
+    cd $TOOLKIT/pkgscripts-ng/
+    git checkout DSM$DSM || exit 1
+    ./EnvDeploy --version $DSM -p $BUILD_ARCH >&2 || exit 1
+    cd -
+else
+    echo "Chroot environment for $BUILD_ARCH-$DSM already exists" >&2
+fi >&2
 
     # Ensure the build environment is not seen as a git repository
     (
@@ -284,7 +289,12 @@ while [ $# -gt 0 ]; do
     fi
     
     # Run PkgCreate.py with proper error handling
-    pkgscripts-ng/PkgCreate.py -c -p $ARCH -v $DSM -x 0 "$PACKAGE" >&2
+    if [ "$ARCH" = "noarch" ]; then
+        # For noarch packages, we need to specify both noarch and the build architecture
+        pkgscripts-ng/PkgCreate.py -c -p "noarch,x86_64" -v $DSM -x 0 "$PACKAGE" >&2
+    else
+        pkgscripts-ng/PkgCreate.py -c -p $ARCH -v $DSM -x 0 "$PACKAGE" >&2
+    fi
     BUILD_RESULT=$?
     
     if [ $BUILD_RESULT -ne 0 ]; then
