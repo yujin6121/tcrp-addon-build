@@ -18,40 +18,15 @@ jobs:
     
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-        
+
       - name: Build Synology Package
-        run: |
-          # Docker 플랫폼 환경변수 설정
-          export DOCKER_DEFAULT_PLATFORM=linux/amd64
-          
-          # 빌드 스크립트가 있다면 실행 권한 부여
-          if [ -f "./build" ]; then
-            chmod +x ./build
-            ./build -v ${{ matrix.dsm }} -p ${{ matrix.arch }} -o ./dist -c package.json -s /stubs/src -k /stubs/synology -b /stubs/SynoBuildConf src/mypackage
-          else
-            # 직접 Docker 명령 실행
-            docker run --quiet --workdir /workspace --rm --privileged \
-              --platform linux/amd64 \
-              --entrypoint "/build" \
-              -v /var/run/docker.sock:/var/run/docker.sock \
-              -v /usr/bin/docker:/usr/bin/docker \
-              -v ${{ github.workspace }}/.toolkit:/toolkit \
-              -v ${{ github.workspace }}:/workspace \
-              build:df1235b990573e \
-              -v ${{ matrix.dsm }} \
-              -p ${{ matrix.arch }} \
-              -o ./dist \
-              -c package.json \
-              -s /stubs/src \
-              -k /stubs/synology \
-              -b /stubs/SynoBuildConf \
-              src/mypackage
-          fi
-        env:
-          DOCKER_DEFAULT_PLATFORM: linux/amd64
+        uses: tomgrv/synology-package-builder@v1
+        with:
+          dsm: ${{ matrix.dsm }}
+          arch: ${{ matrix.arch }}
+          projects: 'src/mypackage'
+          output: './dist'
+          config-name: 'package.json'
             
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
