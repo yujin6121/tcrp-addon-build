@@ -1,328 +1,60 @@
-    #!/bin/sh
+name: Build Synology Package
 
-    # Default DSM version and arch
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
-    export DSM=7.0
-    export ARCH=aarch64
-    export WORKSPACE=$(test -d /workspace && echo "/workspace" || readlink -f $(dirname $0))
-    export TOOLKIT=/toolkit
-    export CONFIG=package.json
-    export OUTPUT=$WORKSPACE/dist
-    export TARGET=
-    export SRC_STUBS=$WORKSPACE/stubs/src
-    export PKG_STUBS=$WORKSPACE/stubs/synology
-    export BLD_STUBS=$WORKSPACE/stubs/SynoBuildConf
-
-    # Parse script arguments for dsm version and arch
-    while getopts ":v:p:o:c:s:k:b:t:" opt; do
-        case $opt in
-        \?)
-            echo "Usage: $0 [-h] [-v DSM_VERSION] [-p ARCH] [-o OUTPUT_DIR] [-c CONFIG_FILE] [-s SRC_STUBS] [-k PKG_STUBS] [-b BLD_STUBS] [-t TARGET] [PROJECTS...]" >&2
-            echo "  -h              Show this help message"
-            echo "  -v DSM_VERSION  Specify the DSM version (default: $DSM)"
-            echo "  -p ARCH         Specify the architecture (default: $ARCH)"
-            echo "  -o OUTPUT_DIR   Specify the output directory (default: $OUTPUT)"
-            echo "  -c CONFIG_FILE  Specify the config file (default: $CONFIG)"
-            echo "  -s SRC_STUBS    Specify the source stubs directory (default: $SRC_STUBS)"
-            echo "  -k PKG_STUBS    Specify the package stubs directory (default: $PKG_STUBS)"
-            echo "  -b BLD_STUBS    Specify the build stubs directory (default: $BLD_STUBS)"
-            echo "  -t TARGET       Specify the subfolder to build (default: none, take package root)"
-            exit 1
-            ;;
-        v)
-            export DSM="$OPTARG"
-            shift 2
-            ;;
-        p)
-            export ARCH="$OPTARG"
-            shift 2
-            ;;
-        o)
-            export OUTPUT=$(readlink -f $OPTARG)
-            shift 2
-            ;;
-        c)
-            export CONFIG=$OPTARG
-            shift 2
-            ;;
-        s)
-            export SRC_STUBS=$(readlink -f $OPTARG)
-            shift 2
-            ;;
-        k)
-            export PKG_STUBS=$(readlink -f $OPTARG)
-            shift 2
-            ;;
-        b)
-            export BLD_STUBS=$(readlink -f $OPTARG)
-            shift 2
-            ;;
-        t)
-            export TARGET=$OPTARG
-            shift 2
-            ;;
-        esac
-    done
-
-    # Ensure running as root
-    if [ "$(id -u)" -ne 0 ]; then
-        echo "This script must be run as root" >&2
-        exit 1
-    fi
-
-    # Ensure python3 is installed
-    if ! command -v python3 >/dev/null 2>&1; then
-        sudo apt-get update
-        sudo apt-get install -y python3 python3-pip
-    fi
-
-    # Ensure cifs is installed
-    if ! command -v mount.cifs >/dev/null 2>&1; then
-        sudo apt-get update
-        sudo apt-get install -y cifs-utils
-    fi
-
-    # Ensure rsync is installed
-    if ! command -v rsync >/dev/null 2>&1; then
-        sudo apt-get update
-        sudo apt-get install -y rsync
-    fi
-
-    # Ensure Build Stubs basename is "SynoBuildConf"
-    if [ ! -d "$BLD_STUBS" ]; then
-        echo "Build stubs folder $BLD_STUBS does not exist" >&2
-        exit 1
-    fi
-
-    # Ensure Source Stubs exists
-    if [ ! -d "$SRC_STUBS" ]; then
-        echo "Source stubs folder $SRC_STUBS does not exist" >&2
-        exit 1
-    fi
-
-    # Ensure Package Stubs exists
-    if [ ! -d "$PKG_STUBS" ]; then
-        echo "Package stubs folder $PKG_STUBS does not exist" >&2
-        exit 1
-    fi
-
-    (
-        echo "Workspace         : $WORKSPACE"
-        echo "Config name       : $CONFIG"
-        echo "Target name       : ${TARGET:-null}"
-        echo "Source stubs      : $SRC_STUBS"
-        echo "Package stubs     : $PKG_STUBS"
-        echo "Build stubs       : $BLD_STUBS"
-        echo "Output folder     : $OUTPUT"
-        echo "DSM version       : $DSM"
-        echo "Architecture      : $ARCH"
-    ) >&2
-
-    # Prepare build environment
-    # https://help.synology.com/developer-guide/getting_started/prepare_environment.html
-    if [ ! -d "$TOOLKIT/pkgscripts-ng" ]; then
-        echo "::group::Prepare build environment" >&2
-        git clone https://github.com/SynologyOpenSource/pkgscripts-ng $TOOLKIT/pkgscripts-ng
-        echo "::endgroup::" >&2
-    fi
-
-    # Make sure the OUTPUT folder exists
-    mkdir -p $OUTPUT
-
-    # Set safe directory
-    git config --global --add safe.directory $TOOLKIT/pkgscripts-ng
-
-    # Check and setup build environment
-    echo "::group::Deploy Chroot Environment" >&2
-
-    if [ "$ARCH" = "noarch" ]; then
-        # For noarch packages in DSM 7.2+, use x86_64-7.2
-        if [ $(echo "$DSM >= 7.2" | bc -l) -eq 1 ]; then
-            BUILD_ARCH="x86_64-7.2"
-        else
-            BUILD_ARCH="x86_64"
-        fi
-    else
-        if [ $(echo "$DSM >= 7.2" | bc -l) -eq 1 ] && [ "$ARCH" = "x86_64" ]; then
-            BUILD_ARCH="x86_64-7.2"
-        else
-            BUILD_ARCH="$ARCH"
-        fi
-    fi
-
-    # Deploy Chroot Environment
-    # https://help.synology.com/developer-guide/getting_started/prepare_environment.html
-    if [ ! -d "$TOOLKIT/build_env/ds.$BUILD_ARCH-$DSM" ] || [ ! -f "$TOOLKIT/build_env/ds.$BUILD_ARCH-$DSM/PkgVersion" ]; then
-        mkdir -p $TOOLKIT/build_env
-        cd $TOOLKIT/pkgscripts-ng/
-        git checkout DSM$DSM || exit 1
-        ./EnvDeploy --version $DSM -p $BUILD_ARCH >&2 || exit 1
-        cd -
-    else
-        echo "Chroot environment for $BUILD_ARCH-$DSM already exists" >&2
-    fi >&2
-
-    # Ensure the build environment is not seen as a git repository
-    (
-        echo *
-        echo !.gitignore
-    ) >$TOOLKIT/.gitignore
-
-    echo "::endgroup::" >&2
-
-    # Reset source folder link
-
-    rm -rf $TOOLKIT/source
-    mkdir -p $TOOLKIT/source
-
-    # Define to camel case
-    toCamelCase() {
-        # Replace delimiters with spaces, then process
-        echo "$*" | awk '{
-            n = split(tolower($0), a, /[ _-]+/)
-            out = a[1]
-            for (i = 2; i <= n; i++) {
-                out = out toupper(substr(a[i],1,1)) substr(a[i],2)
-            }
-            print out
-        }'
-    }
-
-    # For each project in subsequent arguments in the form of name:folder, create a symlink to the folder and build
-    while [ $# -gt 0 ]; do
-
-        case "$1" in
-        *:*)
-            export SOURCE=${1#*:}
-            export PACKAGE=$(toCamelCase ${1%:*})
-            ;;
-        .*)
-            export SOURCE=$1
-            export PACKAGE=$(toCamelCase $(basename $1))
-            ;;
-        *)
-            export SOURCE="."
-            export PACKAGE=$(toCamelCase "$1")
-            ;;
-        esac
-
-        # Immediately check if PACKAGE is set
-        if [ -z "$PACKAGE" ]; then
-            echo "Error: Package name must be provided as an argument" >&2
-            echo "Usage: $0 [-v DSM_VERSION] [-p ARCH] ... <package_name>" >&2
-            exit 1
-        fi
-
-        # Check source folder
-        if [ ! -d "$WORKSPACE/$SOURCE" ]; then
-            echo "Source folder $WORKSPACE/$SOURCE does not exist" >&2
-            exit 1
-        fi
-
-        echo "::group::Regroup stubs & files" >&2
-
-        # Prepare source with stubs
-        echo "Copy $PKG_STUBS/* -> $TOOLKIT/source/$PACKAGE" >&2
-        mkdir -p $TOOLKIT/source/$PACKAGE
-        rsync -a $PKG_STUBS/* $TOOLKIT/source/$PACKAGE/ || exit 1
-
-        echo "Copy $SRC_STUBS/* -> $TOOLKIT/source/$PACKAGE/target" >&2
-        mkdir -p $TOOLKIT/source/$PACKAGE/target
-        rsync -a $SRC_STUBS/* $TOOLKIT/source/$PACKAGE/target/ || exit 1
-
-        echo "Copy $BLD_STUBS/* -> $TOOLKIT/source/$PACKAGE/SynoBuildConf" >&2
-        mkdir -p $TOOLKIT/source/$PACKAGE/SynoBuildConf
-        rsync -a $BLD_STUBS/ $TOOLKIT/source/$PACKAGE/SynoBuildConf/ || exit 1
-
-        # Copy package definition
-        echo "Copy $WORKSPACE/$SOURCE/synology/* -> $TOOLKIT/source/$PACKAGE" >&2
-        rsync -a $WORKSPACE/$SOURCE/synology/ $TOOLKIT/source/$PACKAGE/ 2>/dev/null || echo "No synology folder found in $WORKSPACE/$SOURCE" >&2
-
-        # Copy build definition
-        echo "Copy $WORKSPACE/$SOURCE/SynoBuildConf/* -> $TOOLKIT/source/$PACKAGE" >&2
-        rsync -a $WORKSPACE/$SOURCE/SynoBuildConf/ $TOOLKIT/source/$PACKAGE/SynoBuildConf/ 2>/dev/null || echo "No specific build config found in $WORKSPACE/$SOURCE" >&2
-
-        # Copy config file
-        if [ -f "$WORKSPACE/$SOURCE/$CONFIG" ]; then
-            echo "Copy $WORKSPACE/$SOURCE/$CONFIG -> $TOOLKIT/source/$PACKAGE/config.json" >&2
-            cp $WORKSPACE/$SOURCE/$CONFIG $TOOLKIT/source/$PACKAGE/config.json || exit 1
-            TARGET=$(jq -r --arg target "$TARGET" '.target//$target' $WORKSPACE/$SOURCE/$CONFIG 2>/dev/null)
-
-            echo "Using target $TARGET from $WORKSPACE/$SOURCE/$CONFIG" >&2
-        fi
-
-        # Copy package source
-        echo "Copy $WORKSPACE/$SOURCE/${TARGET:-.}/* -> $TOOLKIT/source/$PACKAGE/target" >&2
-        if [ -f "$WORKSPACE/$SOURCE/.gitignore" ]; then
-            echo "Using .gitignore from $WORKSPACE/$SOURCE" >&2
-            EXCLUDE="--exclude-from=$WORKSPACE/$SOURCE/.gitignore"
-        else
-            echo "No .gitignore file found in $WORKSPACE/$SOURCE, using default excludes" >&2
-        fi
-
-        rsync -a $EXCLUDE --exclude='synology/' --exclude=$(realpath --relative-to="$WORKSPACE/$SOURCE" "$OUTPUT") $WORKSPACE/$SOURCE/${TARGET:-.}/* $TOOLKIT/source/$PACKAGE/${TARGET:+target/} >&2 || exit 1
-
-        echo "::endgroup::" >&2
-
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        dsm: ["7.2"]
+        arch: ["noarch"]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
         
-        # Retrieve docker image for package build
-        echo "::group::Retrieve docker image for $PACKAGE" >&2
-        $(dirname $0)/build-docker $TOOLKIT/source/$PACKAGE
-        echo "::endgroup::" >&2
-
-        # Display package structure
-        echo "::group::Display package structure for $PACKAGE" >&2
-        tree $TOOLKIT/source >&2
-        echo "::endgroup::" >&2
-
-        # Build
-        echo "::group::Build $PACKAGE for DSM$DSM on $ARCH" >&2
-        cd $TOOLKIT
-        
-        # Check if PACKAGE name is set
-        if [ -z "$PACKAGE" ]; then
-            echo "Error: Package name is not set" >&2
-            exit 1
-        fi
-        
-        echo "Building package: $PACKAGE"
-        echo "Architecture: $ARCH"
-        echo "DSM Version: $DSM"
-        
-        # Check if package directory exists
-        if [ ! -d "$TOOLKIT/source/$PACKAGE" ]; then
-            echo "Error: Package directory $TOOLKIT/source/$PACKAGE does not exist" >&2
-            exit 1
-        fi
-        
-        # Run PkgCreate.py with proper error handling
-        if [ "$ARCH" = "noarch" ]; then
-            if [ $(echo "$DSM >= 7.2" | bc -l) -eq 1 ]; then
-                # For noarch packages in DSM 7.2+
-                pkgscripts-ng/PkgCreate.py -c -p "noarch,x86_64-7.2" -v $DSM -x 0 "$PACKAGE" >&2
-            else
-                # For noarch packages in older DSM versions
-                pkgscripts-ng/PkgCreate.py -c -p "noarch,x86_64" -v $DSM -x 0 "$PACKAGE" >&2
-            fi
-        else
-            pkgscripts-ng/PkgCreate.py -c -p $ARCH -v $DSM -x 0 "$PACKAGE" >&2
-        fi
-        BUILD_RESULT=$?
-        
-        if [ $BUILD_RESULT -ne 0 ]; then
-            echo "Error: Package build failed with exit code $BUILD_RESULT" >&2
-            exit $BUILD_RESULT
-        fi
-        
-        echo "::endgroup::" >&2
-
-        # Push to output folder
-        echo "::group::Collect $PACKAGE for DSM$DSM on $ARCH" >&2
-        mkdir -p $OUTPUT
-        find $TOOLKIT/result_spk/ -maxdepth 3 -name "*.spk" ! -type d ! -path "*.bad.*" -exec cp {} $OUTPUT/ \;
-        chmod -R a+rw $OUTPUT
-        echo "::endgroup::" >&2
-
-        # Next package
-        shift
-    done
+      - name: Build Synology Package
+        run: |
+          # Docker 플랫폼 환경변수 설정
+          export DOCKER_DEFAULT_PLATFORM=linux/amd64
+          
+          # 빌드 스크립트가 있다면 실행 권한 부여
+          if [ -f "./build" ]; then
+            chmod +x ./build
+            ./build -v ${{ matrix.dsm }} -p ${{ matrix.arch }} -o ./dist -c package.json -s /stubs/src -k /stubs/synology -b /stubs/SynoBuildConf src/mypackage
+          else
+            # 직접 Docker 명령 실행
+            docker run --quiet --workdir /workspace --rm --privileged \
+              --platform linux/amd64 \
+              --entrypoint "/build" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v /usr/bin/docker:/usr/bin/docker \
+              -v ${{ github.workspace }}/.toolkit:/toolkit \
+              -v ${{ github.workspace }}:/workspace \
+              build:df1235b990573e \
+              -v ${{ matrix.dsm }} \
+              -p ${{ matrix.arch }} \
+              -o ./dist \
+              -c package.json \
+              -s /stubs/src \
+              -k /stubs/synology \
+              -b /stubs/SynoBuildConf \
+              src/mypackage
+          fi
+        env:
+          DOCKER_DEFAULT_PLATFORM: linux/amd64
+            
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: synology-package-${{ matrix.dsm }}-${{ matrix.arch }}
+          path: ./dist/*.spk
